@@ -202,8 +202,3 @@ pdf-ai-chatbot/
 └── nginx.conf
 ```
 
----
-
-## License
-
-MIT — do whatever you want with it.
