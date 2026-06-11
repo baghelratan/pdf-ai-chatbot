@@ -9,6 +9,8 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from config import UPLOAD_DIR, CHROMA_PERSIST_DIR
 from routes import upload as upload_router
@@ -48,26 +50,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+# ── API Routes ────────────────────────────────────────────────────────────────
 app.include_router(upload_router.router, prefix="/api", tags=["upload"])
 app.include_router(chat_router.router,   prefix="/api", tags=["chat"])
 app.include_router(docs_router.router,   prefix="/api", tags=["documents"])
 
 
-@app.get("/", tags=["root"])
-async def root():
-    return {
-        "service": "PDF AI Chatbot",
-        "version": "1.0.0",
-        "status": "running",
-        "docs": "/docs",
-        "health": "/api/health",
-    }
-
-
 @app.get("/api/health", tags=["health"])
 async def health_check():
     return {"status": "ok", "service": "pdf-ai-chatbot"}
+
+
+# ── Serve React frontend (must come AFTER all API routes) ─────────────────────
+_STATIC_DIR = Path(__file__).parent / "static"
+
+if _STATIC_DIR.exists():
+    # Serve hashed assets (JS/CSS bundles)
+    app.mount("/assets", StaticFiles(directory=_STATIC_DIR / "assets"), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        """Return index.html for all non-API paths (SPA client-side routing)."""
+        index = _STATIC_DIR / "index.html"
+        return FileResponse(index)
+else:
+    @app.get("/", tags=["root"])
+    async def root():
+        return {
+            "service": "PDF AI Chatbot",
+            "version": "1.0.0",
+            "status": "running (no frontend built)",
+            "docs": "/docs",
+            "health": "/api/health",
+        }
 
 
 if __name__ == "__main__":
