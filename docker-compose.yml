@@ -1,0 +1,41 @@
+version: '3.9'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: pdf-chatbot-backend
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - GEMINI_MODEL=gemini-1.5-flash
+      - EMBEDDING_MODEL=models/text-embedding-004
+      - CHROMA_PERSIST_DIR=/app/chroma_db
+      - UPLOAD_DIR=/app/uploads
+      - PORT=8000
+    volumes:
+      - chroma_data:/app/chroma_db
+      - upload_data:/app/uploads
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: pdf-chatbot-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  chroma_data:
+  upload_data:

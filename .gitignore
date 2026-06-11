@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Backend runtime
+backend/.env
+backend/uploads/
+backend/chroma_db/
+uploads/
+chroma_db/
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+.npm
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+
+# Env files (protect API keys)
+.env
+.env.*
+!.env.example
