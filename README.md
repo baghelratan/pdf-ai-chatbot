@@ -1,276 +1,209 @@
 # 📄 PDF AI Chatbot
 
-A full-stack web application that lets you upload PDF documents and have a natural-language conversation with their contents, powered by **Google Gemini 1.5 Flash** and **ChromaDB**.
+Ever wished you could just *talk* to your PDF instead of ctrl+F-ing through 80 pages? That's exactly what this does. Drop in a PDF (or several), ask questions in plain English, and get answers with the exact page they came from — powered by Google Gemini.
 
-![Tech Stack](https://img.shields.io/badge/LLM-Gemini%201.5%20Flash-blue?logo=google) ![Vector DB](https://img.shields.io/badge/VectorDB-ChromaDB-orange) ![Backend](https://img.shields.io/badge/Backend-FastAPI-green?logo=fastapi) ![Frontend](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-61DAFB?logo=react)
+🔗 **Live demo:** https://pdf-ai-chatbot-production-8647.up.railway.app
 
----
-
-## ✨ Features
-
-| Feature | Status |
-|---|---|
-| Upload PDFs up to 50 MB | ✅ |
-| Multiple PDF support | ✅ |
-| Text extraction (PyMuPDF) | ✅ |
-| OCR for scanned PDFs (Tesseract) | ✅ |
-| Semantic vector search (ChromaDB) | ✅ |
-| Hybrid BM25 + vector search | ✅ |
-| Streaming responses (SSE) | ✅ |
-| Source attribution with page numbers | ✅ |
-| Collapsible excerpt viewer | ✅ |
-| Conversation memory (last 6 turns) | ✅ |
-| Dark glassmorphism UI | ✅ |
-| Docker Compose deployment | ✅ |
-| Railway deployment config | ✅ |
+![Tech Stack](https://img.shields.io/badge/LLM-Gemini%202.5%20Flash-blue?logo=google) ![Backend](https://img.shields.io/badge/Backend-FastAPI-green?logo=fastapi) ![Frontend](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-61DAFB?logo=react) ![Deploy](https://img.shields.io/badge/Deploy-Railway-blueviolet?logo=railway)
 
 ---
 
-## 🏗️ Architecture
+## What it does
+
+- **Upload any PDF** — drag and drop, up to 50 MB, multiple files at once
+- **Ask questions in plain English** — no special syntax, just chat
+- **Get answers with sources** — every response shows exactly which file and page it came from
+- **Scanned PDFs? No problem** — OCR via Tesseract handles image-based PDFs too
+- **Streaming responses** — answers appear word by word, like ChatGPT
+- **Remembers your conversation** — keeps the last 6 turns of context so follow-up questions work naturally
+
+---
+
+## How it works (the interesting bits)
+
+### Chunking
+When you upload a PDF, the text gets split into overlapping chunks of ~1,200 characters. The overlap (200 chars) is important — it means a sentence that sits right at a chunk boundary doesn't get cut off and lost. Each chunk is tagged with its filename and page number so we always know where it came from.
+
+### Embeddings
+Each chunk gets converted into a 768-dimensional vector using Google's `gemini-embedding-001` model. The key trick here is using different *task types* for documents vs queries — `retrieval_document` when indexing, `retrieval_query` when searching. This directional embedding meaningfully improves how well matches get found.
+
+### Retrieval
+When you ask a question, it doesn't just do a simple similarity search. It runs a **hybrid search**:
+1. Embed your question and find the top 20 semantically similar chunks (vector search)
+2. Re-score those 20 chunks with BM25 keyword matching
+3. Blend the scores: 70% vector + 30% keyword
+4. Return the top 5 for the LLM to use
+
+This combo handles both fuzzy questions ("what does the author conclude about X?") and precise lookups ("find section 4.2") better than either approach alone.
+
+### Prompt design
+The model is told to answer *only* from the provided excerpts and always cite the source. If the answer isn't in the documents, it says so instead of making something up. Chat history is injected as a rolling window so follow-up questions work without re-reading everything.
+
+```
+[Excerpt 1 | File: report.pdf | Page: 3]
+<text>
+---
+[Excerpt 2 | File: report.pdf | Page: 7]
+<text>
+
+Conversation History:
+User: <previous question>
+Assistant: <previous answer>
+
+Current Question: <your question>
+```
+
+---
+
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────┐
-│          Frontend (Vite + React)                 │
-│  • Drag-and-drop upload    • Streaming chat      │
-│  • Source cards            • Markdown rendering  │
+│          React + Vite (Frontend)                 │
+│  drag-and-drop upload  •  streaming chat         │
+│  source cards with excerpts  •  markdown render  │
 └────────────────────┬────────────────────────────┘
                      │ HTTP / SSE
 ┌────────────────────▼────────────────────────────┐
-│          Backend (FastAPI + Python)              │
-│  • PDF ingestion   • PyMuPDF + OCR              │
-│  • Chunking        • Google Embeddings          │
-│  • ChromaDB        • BM25 reranking             │
-│  • Gemini 1.5 Flash (streaming)                 │
+│          FastAPI (Backend)                       │
+│  PyMuPDF + OCR  •  chunking  •  embeddings      │
+│  numpy vector store  •  BM25 hybrid search      │
+│  Gemini 2.5 Flash (streaming)                   │
 └─────────────────────────────────────────────────┘
 ```
 
----
-
-## 🧠 Technical Decisions
-
-### Chunking Strategy
-**Recursive character text splitter** with:
-- **Chunk size**: 1,200 characters (~800 tokens)
-- **Overlap**: 200 characters (~130 tokens)
-- **Split order**: paragraph → sentence → word → character
-
-This approach preserves natural language boundaries. The overlap prevents information loss at chunk edges — a question spanning two chunks still gets a coherent answer. Metadata (`filename`, `page_number`, `chunk_index`) is stored with each chunk for precise source attribution.
-
-### Embedding Model
-**`text-embedding-004`** (Google's latest general-purpose model):
-- 768-dimensional dense vectors
-- Distinct `task_type` for documents (`retrieval_document`) vs queries (`retrieval_query`) — this directional embedding significantly improves retrieval precision
-- Batched embedding (up to 100 texts/call) for efficiency
-
-### Prompt Design
-```
-System:
-  You are an expert document assistant. Answer ONLY from the provided excerpts.
-  Always cite the source filename and page number(s). If the answer is not in
-  the excerpts, say so explicitly. Use markdown formatting.
-
-Context:
-  [Excerpt 1 | File: report.pdf | Page: 3]
-  <text>
-  ---
-  [Excerpt 2 | File: report.pdf | Page: 7]
-  <text>
-
-Conversation History:
-  User: <previous question>
-  Assistant: <previous answer>
-
-Current Question: <user question>
-```
-
-Key choices:
-- **Grounding instruction**: "Answer ONLY from excerpts" prevents hallucination
-- **Explicit citation requirement**: Forces the model to include page references
-- **Rolling history**: Last 6 turns (configurable) maintain conversational context without token overflow
-- **Markdown formatting**: Produces structured, readable responses
-
-### Retrieval Approach
-**Hybrid search** combining:
-1. **Vector similarity** (70% weight): ChromaDB cosine similarity against `text-embedding-004` query embedding
-2. **BM25 keyword matching** (30% weight): Sparse lexical scoring on the candidate pool
-
-Workflow:
-1. Embed user query with `retrieval_query` task type
-2. Fetch top-20 candidates from ChromaDB (filtered by session doc_ids)
-3. Re-score all 20 with BM25 on tokenized text
-4. Blend scores: `0.7 × vector_score + 0.3 × bm25_score`
-5. Return top-5 for context injection
-
-This hybrid approach handles both semantic queries ("what does the author conclude?") and keyword queries ("find section 4.2") better than either method alone.
+The frontend is served as static files directly from FastAPI — no separate frontend server needed in production.
 
 ---
 
-## 🚀 Quick Start
+## Running locally
 
-### Prerequisites
-- Python 3.11+
-- Node.js 20+
-- A Gemini API key from [Google AI Studio](https://aistudio.google.com/)
-
-### 1. Clone & Setup
+You'll need Python 3.11+, Node.js 20+, and a [Gemini API key](https://aistudio.google.com/apikey) (free tier works fine).
 
 ```bash
-git clone <your-repo-url>
-cd "pdf ai chatbot"
+git clone https://github.com/baghelratan/pdf-ai-chatbot
+cd pdf-ai-chatbot
 ```
 
-### 2. Backend
-
+**Backend:**
 ```bash
 cd backend
 pip install -r requirements.txt
 
-# Create .env file
-echo "GOOGLE_API_KEY=your_key_here" > .env
+# Create your .env file
+cp .env.example .env
+# Edit .env and add your GOOGLE_API_KEY
 
-# Start backend
 python main.py
-# → runs on http://localhost:8000
+# → http://localhost:8000
 ```
 
-### 3. Frontend
-
+**Frontend** (in a separate terminal):
 ```bash
 cd frontend
 npm install
 npm run dev
-# → runs on http://localhost:5173
+# → http://localhost:5173
 ```
 
-### 4. Open the App
-
-Visit **http://localhost:5173**, upload a PDF, and start chatting!
+Then open http://localhost:5173, upload a PDF, and start asking questions.
 
 ---
 
-## 🐳 Docker Compose
+## Docker
+
+If you prefer containers:
 
 ```bash
-# Set your API key
 export GOOGLE_API_KEY=your_key_here
-
-# Build and start both services
 docker compose up --build
-
-# App will be available at http://localhost:3000
+# → http://localhost:3000
 ```
 
 ---
 
-## 🚢 Deploy to Railway
+## Deploying to Railway
 
-### Backend Service
-1. Push your repo to GitHub
-2. Go to [railway.app](https://railway.app) → New Project → Deploy from GitHub
-3. Select your repo
-4. Railway auto-detects `railway.toml` and uses `Dockerfile.backend`
-5. Add environment variable: `GOOGLE_API_KEY=your_key_here`
-6. Deploy — Railway provides a public URL (e.g. `https://pdf-chatbot-backend.up.railway.app`)
+1. Push the repo to GitHub
+2. Go to [railway.app](https://railway.app) → New Project → Deploy from GitHub repo
+3. Railway picks up `railway.toml` automatically and uses `Dockerfile.backend`
+4. In your service's **Variables** tab, add `GOOGLE_API_KEY` with your key
+5. Hit deploy — you'll get a public URL in a couple minutes
 
-### Frontend Service
-1. Add another service in the same Railway project
-2. Set `Dockerfile.frontend` as the Dockerfile
-3. Set build arg: `VITE_API_URL=https://your-backend-url.up.railway.app`
-4. Update `vite.config.js` proxy target to match your Railway backend URL
+The Dockerfile does a multi-stage build: first compiles the React frontend, then copies the built files into the Python image so everything runs from one service.
 
 ---
 
-## 📡 API Reference
+## API
 
-| Method | Endpoint | Description |
+The full interactive docs are at `/docs` on any running instance. Quick reference:
+
+| Method | Endpoint | What it does |
 |---|---|---|
 | `GET` | `/api/health` | Health check |
-| `POST` | `/api/upload` | Upload PDFs (multipart) |
+| `POST` | `/api/upload` | Upload one or more PDFs |
 | `GET` | `/api/documents` | List uploaded documents |
 | `DELETE` | `/api/documents/{id}` | Remove a document |
-| `POST` | `/api/chat` | Stream chat response (SSE) |
+| `POST` | `/api/chat` | Ask a question (streams back SSE) |
 
-### Chat Request Body
-```json
-{
-  "question": "What are the key findings?",
-  "doc_ids": ["uuid-1", "uuid-2"],
-  "history": [
-    {"role": "user", "content": "..."},
-    {"role": "assistant", "content": "..."}
-  ]
-}
-```
-
-### SSE Event Types
+Chat responses stream as Server-Sent Events:
 ```
 data: {"type": "sources", "data": [{filename, page_number, text, score}]}
-data: {"type": "token",   "data": "partial answer text"}
+data: {"type": "token",   "data": "partial answer..."}
 data: {"type": "done",    "data": ""}
-data: {"type": "error",   "data": "error message"}
-data: [DONE]
 ```
 
 ---
 
-## 📁 Project Structure
+## Configuration
+
+Everything is configurable via environment variables. The defaults are sensible for most use cases.
+
+| Variable | Default | What it controls |
+|---|---|---|
+| `GOOGLE_API_KEY` | — | **Required.** Your Gemini API key |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Which Gemini model to use |
+| `EMBEDDING_MODEL` | `gemini-embedding-001` | Embedding model |
+| `CHUNK_SIZE` | `1200` | Characters per chunk |
+| `CHUNK_OVERLAP` | `200` | Overlap between chunks |
+| `TOP_K` | `5` | How many chunks to feed the LLM |
+| `VECTOR_WEIGHT` | `0.7` | Vector score weight in hybrid search |
+| `BM25_WEIGHT` | `0.3` | Keyword score weight |
+| `MAX_HISTORY_TURNS` | `6` | Conversation turns kept in context |
+| `MAX_UPLOAD_SIZE_MB` | `50` | Max upload size |
+
+---
+
+## Project layout
 
 ```
-pdf ai chatbot/
+pdf-ai-chatbot/
 ├── backend/
-│   ├── main.py           # FastAPI app entry point
-│   ├── config.py         # Centralised config from .env
-│   ├── pdf_processor.py  # PyMuPDF + OCR extraction
-│   ├── chunker.py        # Recursive text splitter
-│   ├── embeddings.py     # Google text-embedding-004
-│   ├── vector_store.py   # ChromaDB + BM25 hybrid search
-│   ├── chat.py           # Retrieval → Gemini streaming
-│   ├── requirements.txt
+│   ├── main.py           # FastAPI app + serves frontend static files
+│   ├── config.py         # All settings from environment variables
+│   ├── pdf_processor.py  # PDF text extraction (PyMuPDF + OCR)
+│   ├── chunker.py        # Recursive text splitter with overlap
+│   ├── embeddings.py     # Gemini embeddings (batched)
+│   ├── vector_store.py   # Numpy vector store + BM25 hybrid search
+│   ├── chat.py           # Retrieval → prompt → Gemini streaming
 │   └── routes/
 │       ├── upload.py     # POST /api/upload
 │       ├── chat.py       # POST /api/chat (SSE)
-│       └── documents.py  # GET/DELETE /api/documents
+│       └── documents.py  # GET, DELETE /api/documents
 ├── frontend/
-│   ├── src/
-│   │   ├── App.jsx           # Main shell + SSE client
-│   │   ├── index.css         # Design system
-│   │   └── components/
-│   │       ├── UploadPanel.jsx
-│   │       ├── ChatWindow.jsx
-│   │       ├── MessageBubble.jsx
-│   │       └── SourceCard.jsx
-│   ├── index.html
-│   ├── package.json
-│   └── vite.config.js
-├── Dockerfile.backend
-├── Dockerfile.frontend
+│   └── src/
+│       ├── App.jsx           # Main app + SSE streaming client
+│       ├── index.css         # Styles
+│       └── components/       # UploadPanel, ChatWindow, MessageBubble, SourceCard
+├── Dockerfile.backend    # Multi-stage: builds frontend + runs backend
+├── Dockerfile.frontend   # Standalone frontend (nginx) for separate deploys
 ├── docker-compose.yml
-├── nginx.conf
 ├── railway.toml
-└── README.md
+└── nginx.conf
 ```
 
 ---
 
-## ⚙️ Configuration
+## License
 
-All backend settings are via environment variables (`.env`):
-
-| Variable | Default | Description |
-|---|---|---|
-| `GOOGLE_API_KEY` | — | **Required.** Gemini API key |
-| `GEMINI_MODEL` | `gemini-1.5-flash` | LLM model name |
-| `EMBEDDING_MODEL` | `models/text-embedding-004` | Embedding model |
-| `CHUNK_SIZE` | `1200` | Max chars per chunk |
-| `CHUNK_OVERLAP` | `200` | Overlap between chunks |
-| `TOP_K` | `5` | Number of chunks retrieved |
-| `VECTOR_WEIGHT` | `0.7` | Weight of vector score in hybrid search |
-| `BM25_WEIGHT` | `0.3` | Weight of BM25 score |
-| `MAX_HISTORY_TURNS` | `6` | Chat turns kept in context |
-| `MAX_UPLOAD_SIZE_MB` | `50` | Max PDF upload size |
-
----
-
-## 📜 License
-
-MIT
+MIT — do whatever you want with it.
