@@ -8,6 +8,12 @@ GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
 GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "gemini-embedding-001")
 
+if not GOOGLE_API_KEY:
+    raise RuntimeError(
+        "GOOGLE_API_KEY environment variable is not set. "
+        "Add it to your Railway service Variables tab before deploying."
+    )
+
 # ── Chunking ──────────────────────────────────────────────────────────────────
 CHUNK_SIZE: int = int(os.getenv("CHUNK_SIZE", "1200"))       # characters
 CHUNK_OVERLAP: int = int(os.getenv("CHUNK_OVERLAP", "200"))  # characters

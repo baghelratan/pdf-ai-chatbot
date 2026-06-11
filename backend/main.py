@@ -54,6 +54,17 @@ app.include_router(chat_router.router,   prefix="/api", tags=["chat"])
 app.include_router(docs_router.router,   prefix="/api", tags=["documents"])
 
 
+@app.get("/", tags=["root"])
+async def root():
+    return {
+        "service": "PDF AI Chatbot",
+        "version": "1.0.0",
+        "status": "running",
+        "docs": "/docs",
+        "health": "/api/health",
+    }
+
+
 @app.get("/api/health", tags=["health"])
 async def health_check():
     return {"status": "ok", "service": "pdf-ai-chatbot"}
